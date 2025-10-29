@@ -1,17 +1,34 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { motion } from 'framer-motion';
 import { PageLayout } from '@/components/layout/PageLayout';
-import { ProductGrid } from '@/components/product/ProductGrid';
-import { HeroSection } from '@/components/sections/HeroSection';
-import { FeaturedProducts } from '@/components/sections/FeaturedProducts';
-import { CategoryGrid } from '@/components/sections/CategoryGrid';
 import { Button } from '@/components/ui/button';
 import { ArrowRight, Sparkles, Zap, Shield } from 'lucide-react';
 import type { Product } from '@/types';
 import { getProducts } from '@/lib/firestore';
 import { useUIActions } from '@/store/uiStore';
+
+// Lazy load heavy components for better performance
+const ProductGrid = dynamic(() => import('@/components/product/ProductGrid').then(mod => ({ default: mod.ProductGrid })), {
+  loading: () => <div className="text-center py-8">Loading products...</div>,
+  ssr: false,
+});
+
+const HeroSection = dynamic(() => import('@/components/sections/HeroSection').then(mod => ({ default: mod.HeroSection })), {
+  loading: () => <div className="h-screen bg-gradient-to-b from-brand-primary/20 to-transparent" />,
+});
+
+const FeaturedProducts = dynamic(() => import('@/components/sections/FeaturedProducts').then(mod => ({ default: mod.FeaturedProducts })), {
+  loading: () => <div className="text-center py-8">Loading featured products...</div>,
+  ssr: false,
+});
+
+const CategoryGrid = dynamic(() => import('@/components/sections/CategoryGrid').then(mod => ({ default: mod.CategoryGrid })), {
+  loading: () => <div className="text-center py-8">Loading categories...</div>,
+  ssr: false,
+});
 
 const fadeInUp = {
   hidden: { opacity: 0, y: 30 },
@@ -47,18 +64,27 @@ export default function HomePage() {
       try {
         setGlobalLoading(true);
         
-        // Load featured and new products in parallel
-        const [featuredResult, newResult] = await Promise.all([
-          getProducts(8, undefined, { status: 'active' }),
-          getProducts(8, undefined, { status: 'active' }),
-        ]);
+        // Optimize: Load products once and filter client-side
+        // This reduces the number of Firestore queries from 2 to 1
+        const result = await getProducts(16, undefined, { status: 'active' });
 
-        // Filter featured products (this would normally be done with a Firestore query)
-        const featured = featuredResult.products.filter(p => p.featureFlags?.isFeatured);
-        const newItems = newResult.products.filter(p => p.featureFlags?.isNew);
+        // Filter featured and new products efficiently
+        const featured: Product[] = [];
+        const newItems: Product[] = [];
+        
+        for (const product of result.products) {
+          if (product.featureFlags?.isFeatured && featured.length < 6) {
+            featured.push(product);
+          }
+          if (product.featureFlags?.isNew && newItems.length < 6) {
+            newItems.push(product);
+          }
+          // Exit early if we have enough of both
+          if (featured.length >= 6 && newItems.length >= 6) break;
+        }
 
-        setFeaturedProducts(featured.slice(0, 6));
-        setNewProducts(newItems.slice(0, 6));
+        setFeaturedProducts(featured);
+        setNewProducts(newItems);
       } catch (error) {
         console.error('Error loading products:', error);
       } finally {
@@ -69,6 +95,25 @@ export default function HomePage() {
 
     loadProducts();
   }, [setGlobalLoading]);
+
+  // Memoize feature list to prevent re-renders
+  const features = useMemo(() => [
+    {
+      icon: Sparkles,
+      title: 'Premium Design',
+      description: 'Beautiful, tactile interface that feels natural and intuitive',
+    },
+    {
+      icon: Zap,
+      title: 'Lightning Fast',
+      description: 'Optimized for speed with instant loading and smooth animations',
+    },
+    {
+      icon: Shield,
+      title: 'Secure & Trusted',
+      description: 'Your data is protected with enterprise-grade security',
+    },
+  ], []);
 
   return (
     <PageLayout headerTransparent>
@@ -107,23 +152,7 @@ export default function HomePage() {
               viewport={{ once: true }}
               className="grid grid-cols-1 md:grid-cols-3 gap-8"
             >
-              {[
-                {
-                  icon: Sparkles,
-                  title: 'Premium Design',
-                  description: 'Beautiful, tactile interface that feels natural and intuitive',
-                },
-                {
-                  icon: Zap,
-                  title: 'Lightning Fast',
-                  description: 'Optimized for speed with instant loading and smooth animations',
-                },
-                {
-                  icon: Shield,
-                  title: 'Secure & Trusted',
-                  description: 'Your data is protected with enterprise-grade security',
-                },
-              ].map((feature, index) => (
+              {features.map((feature) => (
                 <motion.div
                   key={feature.title}
                   variants={fadeInUp}
