@@ -128,19 +128,26 @@ This document provides a comprehensive summary of the performance optimizations 
 
 ### Cache Implementation
 ```typescript
-// Simple in-memory cache with TTL
+// Simple in-memory cache with TTL and proper typing
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
 
-const cache = new Map<string, CacheEntry<any>>();
+const cache = new Map<string, CacheEntry<unknown>>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 ```
 
 ### Dynamic Import Pattern
 ```typescript
-const ProductGrid = dynamic(() => import('@/components/product/ProductGrid').then(mod => ({ default: mod.ProductGrid })), {
+// For default exports, use simplified syntax
+const ProductGrid = dynamic(() => import('@/components/product/ProductGrid'), {
+  loading: () => <div className="text-center py-8">Loading products...</div>,
+  ssr: false,
+});
+
+// For named exports, use the extended syntax
+const ProductGrid = dynamic(() => import('@/components/product').then(mod => ({ default: mod.ProductGrid })), {
   loading: () => <div className="text-center py-8">Loading products...</div>,
   ssr: false,
 });

@@ -19,21 +19,21 @@ import {
 import { db } from './firebase';
 import type { Product, Order, OrderCreate } from '@/types';
 
-// Simple in-memory cache with TTL
+// Simple in-memory cache with TTL and proper typing
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
 
-const cache = new Map<string, CacheEntry<any>>();
+const cache = new Map<string, CacheEntry<unknown>>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-function getCacheKey(prefix: string, params: any): string {
+function getCacheKey(prefix: string, params: Record<string, unknown>): string {
   return `${prefix}:${JSON.stringify(params)}`;
 }
 
 function getFromCache<T>(key: string): T | null {
-  const entry = cache.get(key);
+  const entry = cache.get(key) as CacheEntry<T> | undefined;
   if (!entry) return null;
   
   const now = Date.now();
