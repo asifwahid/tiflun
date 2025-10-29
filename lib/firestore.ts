@@ -19,6 +19,36 @@ import {
 import { db } from './firebase';
 import type { Product, Order, OrderCreate } from '@/types';
 
+// Simple in-memory cache with TTL and proper typing
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const cache = new Map<string, CacheEntry<unknown>>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(prefix: string, params: Record<string, unknown>): string {
+  return `${prefix}:${JSON.stringify(params)}`;
+}
+
+function getFromCache<T>(key: string): T | null {
+  const entry = cache.get(key) as CacheEntry<T> | undefined;
+  if (!entry) return null;
+  
+  const now = Date.now();
+  if (now - entry.timestamp > CACHE_TTL) {
+    cache.delete(key);
+    return null;
+  }
+  
+  return entry.data;
+}
+
+function setCache<T>(key: string, data: T): void {
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
 // Products collection helpers
 export const productsCollection = collection(db, 'products');
 
@@ -27,6 +57,15 @@ export const getProducts = async (
   lastDoc?: DocumentSnapshot,
   filters?: { status?: string; category?: string }
 ) => {
+  // Check cache only for first page without lastDoc
+  const cacheKey = getCacheKey('products', { limitCount, filters, hasLastDoc: !!lastDoc });
+  if (!lastDoc) {
+    const cached = getFromCache<{ products: Product[]; lastDoc: DocumentSnapshot; hasMore: boolean }>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
   let q = query(
     productsCollection,
     where('status', '==', filters?.status || 'active'),
@@ -48,30 +87,59 @@ export const getProducts = async (
     ...doc.data(),
   })) as Product[];
 
-  return {
+  const result = {
     products,
     lastDoc: snapshot.docs[snapshot.docs.length - 1],
     hasMore: snapshot.docs.length === limitCount,
   };
+
+  // Cache first page results
+  if (!lastDoc) {
+    setCache(cacheKey, result);
+  }
+
+  return result;
 };
 
 export const getProductBySlug = async (slug: string) => {
+  const cacheKey = getCacheKey('product-slug', { slug });
+  const cached = getFromCache<Product | null>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
   const q = query(productsCollection, where('slug', '==', slug), limit(1));
   const snapshot = await getDocs(q);
   
-  if (snapshot.empty) return null;
+  if (snapshot.empty) {
+    setCache(cacheKey, null);
+    return null;
+  }
   
   const doc = snapshot.docs[0];
-  return { id: doc.id, ...doc.data() } as Product;
+  const product = { id: doc.id, ...doc.data() } as Product;
+  setCache(cacheKey, product);
+  return product;
 };
 
 export const getProductById = async (id: string) => {
+  const cacheKey = getCacheKey('product-id', { id });
+  const cached = getFromCache<Product | null>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
   const docRef = doc(db, 'products', id);
   const docSnap = await getDoc(docRef);
   
-  if (!docSnap.exists()) return null;
+  if (!docSnap.exists()) {
+    setCache(cacheKey, null);
+    return null;
+  }
   
-  return { id: docSnap.id, ...docSnap.data() } as Product;
+  const product = { id: docSnap.id, ...docSnap.data() } as Product;
+  setCache(cacheKey, product);
+  return product;
 };
 
 export const createProduct = async (productData: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -89,6 +157,15 @@ export const updateProduct = async (id: string, updates: Partial<Product>) => {
     ...updates,
     updatedAt: serverTimestamp(),
   });
+  
+  // Invalidate cache for this product
+  cache.delete(getCacheKey('product-id', { id }));
+  // Clear products list cache to ensure fresh data
+  for (const key of cache.keys()) {
+    if (key.startsWith('products:')) {
+      cache.delete(key);
+    }
+  }
 };
 
 export const deleteProduct = async (id: string) => {
